@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13-alpine
+    container_name: homedesign_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-homedesign}
+    ports:
+      - "3254:5432"
+    networks:
+      - homedesign_network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: ./home_design_app_backend/Dockerfile
+    container_name: homedesign_backend
+    depends_on:
+      - db
+    ports:
+      - "8100:8100"
+    environment:
+      FLASK_APP: src/main.py
+      FLASK_RUN_HOST: 0.0.0.0
+      FLASK_RUN_PORT: 8100
+      FLASK_ENV: development # or production
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-password}
+      DB_HOST: db
+      DB_PORT: 3254
+      DB_NAME: ${DB_NAME:-homedesign}
+      # Required for SQLAlchemy to initialize tables if they don't exist
+      # This should point to the location of your frontend build within the backend container if backend serves frontend
+      # FRONTEND_FOLDER: /app/static/dist # Example if backend serves frontend
+    volumes:
+      # Mount the backend source code for development (optional, remove for production build)
+      # - ./home_design_app_backend/src:/app/src
+      # Mount the frontend build directory if backend is serving it
+      - ./home_design_app_frontend/dist:/app/frontend_dist # Backend will serve from here
+    networks:
+      - homedesign_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./home_design_app_frontend
+      dockerfile: Dockerfile
+    container_name: homedesign_frontend_builder # This container just builds, nginx will serve
+    # This service is only for building the frontend, it doesn't run long term.
+    # The built files are copied to a volume or directly to nginx service context.
+    # For simplicity, we'll have nginx use the output from this build stage directly.
+    # However, the current frontend Dockerfile already outputs to a minimal image.
+    # So, we can create an nginx service that uses the output of the frontend Dockerfile.
+    # Let's adjust the frontend Dockerfile to be more suitable for nginx serving.
+    # Or, use a multi-stage build in docker-compose for nginx.
+    # For now, let's assume the backend serves the frontend static files as configured in its main.py
+    # The backend Dockerfile copies ./home_design_app_backend/src, and main.py is in there.
+    # The main.py was configured to serve static files from ../home_design_app_frontend/dist
+    # We need to make sure this path is correct inside the backend container.
+    # The volume mount in backend service: - ./home_design_app_frontend/dist:/app/frontend_dist
+    # So main.py should look for /app/frontend_dist
+    # The frontend service as defined now is just a builder. We don't need to run it if backend serves files.
+    # If we want a separate nginx for frontend:
+    # depends_on:
+    #   - backend # if frontend makes API calls during build or needs backend to be up
+    # networks:
+    #   - homedesign_network
+
+  nginx:
+    image: nginx:alpine
+    container_name: homedesign_nginx
+    ports:
+      - "80:80"
+      - "443:443" # If SSL is configured
+    volumes:
+      - ./home_design_app_frontend/dist:/usr/share/nginx/html # Serve built frontend files
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro # Custom nginx config (optional)
+      # For SSL (optional):
+      # - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend # Nginx will proxy to backend
+      # - frontend # If frontend service was actually running and serving something nginx needs
+    networks:
+      - homedesign_network
+    restart: unless-stopped
+
+networks:
+  homedesign_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
